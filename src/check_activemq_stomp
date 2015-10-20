@@ -1,0 +1,152 @@
+#!/usr/bin/env python
+
+# Massimo Paladin
+# Massimo.Paladin@cern.ch
+
+import os
+import sys
+import stomp
+import time
+from amq.MultipleProducerConsumer import TimeoutException
+from amq.SingleBroker import StompTest
+from amqprobesutils import OptionParser
+
+import logging
+logging.basicConfig()
+log = logging.getLogger(__file__)
+
+NAGIOS_OK = 0
+NAGIOS_WARNING = 1
+NAGIOS_CRITICAL = 2
+NAGIOS_UNKNOWN = 3
+
+def print_version():
+    print "Version: 1.0"
+    
+def parse_args():
+    usage = 'usage: %prog [options] '
+    parser = OptionParser(usage=usage)
+    parser.add_option('-V', '--version',
+                      dest='version', 
+                      action="store_true", 
+                      default=False, 
+                      help='the version of the plugin')
+    parser.add_option('-t', '--timeout',
+                      dest='timeout', 
+                      type="int", 
+                      default=15, 
+                      help='timeout in seconds [default=15]')
+    parser.add_option('-w', '--warning',
+                      dest='warning', 
+                      action="store_true", 
+                      default=False, 
+                      help='return warning state in case of error')
+    parser.add_option('-c', '--critical',
+                      dest='critical', 
+                      action="store_true", 
+                      default=True, 
+                      help='return critical state in case of error [default]')
+    parser.add_option('-H', '--hostname',
+                      dest='hostname', 
+                      default=None, 
+                      help='the broker to test')
+    parser.add_option('-D', '--dest',
+                      dest='dest', 
+                      default=None, 
+                      help='the destination queue')
+    parser.add_option('-v', '--verbose',
+                      dest='verbose', 
+                      action="store_true", 
+                      default=False, 
+                      help='verbose logging? [default=False]')
+    parser.add_option('-d', '--debug',
+                      dest='debug', 
+                      action="store_true", 
+                      default=False, 
+                      help='debug logging? [default=False]')
+    parser.add_option('-p', '--port',
+                      type="int", 
+                      dest='port', 
+                      default=None, 
+                      help='the port which is a STOMP listener')
+    parser.add_option('-s', '--ssl',
+                      dest='ssl', 
+                      action="store_true", 
+                      default=False, 
+                      help='use SSL? [default=False]')
+    parser.add_option('-C', '--cert',
+                      dest='hostcert', 
+                      default=None,
+                      help='certificate to use in SSL connection')
+    parser.add_option('-K', '--key',
+                      dest='hostkey', 
+                      default=None,
+                      help='key to use in SSL connection')
+    parser.add_option('--username',
+                      dest='username', 
+                      default=None,
+                      help='username to use for the connection')
+    parser.add_option('--password',
+                      dest='password', 
+                      default=None,
+                      help='password to use for connection')
+    opts, args = parser.parse_args()
+    if opts.version:
+        print_version()
+        sys.exit(NAGIOS_OK)
+    if opts.verbose:
+        log.setLevel(logging.INFO)
+        logging.getLogger('MultipleProducerConsumer').setLevel(logging.INFO)
+    if opts.debug:
+        log.setLevel(logging.DEBUG)
+        logging.getLogger('stomp').setLevel(logging.DEBUG)
+    parser.check_required("-H")
+    parser.check_required("-D")
+    parser.check_required("-p")
+    return opts, args
+
+if __name__ == '__main__':
+    
+    opts, args = parse_args()
+    error_code = NAGIOS_CRITICAL
+    error_prefix = "CRITICAL - "
+    if opts.warning:
+        error_code = NAGIOS_WARNING
+        error_prefix = "WARNING - "
+
+    if opts.ssl:
+        if opts.hostcert and (not os.path.exists(opts.hostcert)):
+            log.info("Host cert doesn't exists or not readable")
+            print "UNKNOWN - Host cert doesn't exists or not readable"
+            sys.exit(NAGIOS_UNKNOWN)
+        if opts.hostkey and (not os.path.exists(opts.hostkey)):
+            log.info("Host key doesn't exists or not readable")
+            print "UNKNOWN - Host key doesn't exists or not readable"
+            sys.exit(NAGIOS_UNKNOWN)
+    else:
+        opts.hostcert = None
+        opts.hostkey = None
+    
+    message = 'OK - STOMP connection on port %s: sent 1 message, received 1 message' \
+            % opts.port
+    exit_code = NAGIOS_OK
+    st = StompTest(opts.hostname, opts.hostname, opts.port, destination=opts.dest, hostcert=opts.hostcert, hostkey=opts.hostkey, timeout=opts.timeout)
+    st.setConnectionExtraHeaders('user', opts.username)
+    st.setConnectionExtraHeaders('passcode', opts.password)
+    st.setup()
+    try:
+        st.start()
+    except KeyboardInterrupt, e:
+        exit_code = error_code
+        message = "%skeyboard interrupt" % (error_prefix)
+    except TimeoutException, e:
+        exit_code = error_code
+        message = '%sTimeout error checking STOMP connection on port %s: %s' \
+                % (error_prefix, opts.port, e)
+    except AssertionError, e:
+        exit_code = error_code
+        message = '%s%s' % (error_prefix, e)
+    st.stop()
+    
+    print message
+    sys.exit(exit_code)

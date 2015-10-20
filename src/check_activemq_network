@@ -1,0 +1,206 @@
+#!/usr/bin/env python
+
+# Massimo Paladin
+# Massimo.Paladin@cern.ch
+
+import os
+import sys
+import stomp
+import time
+from amq.MultipleProducerConsumer import TimeoutException, ErrorFrameException
+from amq.MultipleBrokersTopic import MultipleBrokersTopic
+from amq.MultipleBrokersVirtualTopic import MultipleBrokersVirtualTopic
+from amqprobesutils import OptionParser
+
+import logging
+logging.basicConfig()
+log = logging.getLogger(__file__)
+
+NAGIOS_OK = 0
+NAGIOS_WARNING = 1
+NAGIOS_CRITICAL = 2
+NAGIOS_UNKNOWN = 3
+
+def print_version():
+    print "Version: 1.0"
+    
+def parse_args():
+    usage = 'usage: %prog [options] '
+    parser = OptionParser(usage=usage)
+    parser.add_option('-V', '--version',
+                      dest='version', 
+                      action="store_true", 
+                      default=False, 
+                      help='the version of the plugin')
+    parser.add_option('-t', '--timeout',
+                      dest='timeout', 
+                      type="int", 
+                      default=15, 
+                      help='timeout in seconds [default=15]')
+    parser.add_option('-w', '--warning',
+                      dest='warning', 
+                      action="store_true", 
+                      default=False, 
+                      help='return warning state in case of error')
+    parser.add_option('-c', '--critical',
+                      dest='critical', 
+                      action="store_true", 
+                      default=True, 
+                      help='return critical state in case of error [default]')
+    parser.add_option('-H', '--hostname',
+                      dest='hostname', 
+                      default=None, 
+                      help='the broker to test')
+    parser.add_option('-D', '--dest',
+                      dest='dest', 
+                      default=None, 
+                      help='the destination topic')
+    parser.add_option('-v', '--verbose',
+                      dest='verbose', 
+                      action="store_true", 
+                      default=False, 
+                      help='verbose logging? [default=False]')
+    parser.add_option('-d', '--debug',
+                      dest='debug', 
+                      action="store_true", 
+                      default=False, 
+                      help='debug logging? [default=False]')
+    parser.add_option('-p', '--port',
+                      type="int", 
+                      dest='port', 
+                      default=None, 
+                      help='the port which is a STOMP listener')
+    parser.add_option('-s', '--ssl',
+                      dest='ssl', 
+                      action="store_true", 
+                      default=False, 
+                      help='use SSL? [default=False]')
+    parser.add_option('-C', '--cert',
+                      dest='hostcert', 
+                      default=None,
+                      help='certificate to use in SSL connection')
+    parser.add_option('-K', '--key',
+                      dest='hostkey', 
+                      default=None,
+                      help='key to use in SSL connection')
+    parser.add_option('--credentials',
+                      dest='credentials', 
+                      default="",
+                      help='username and passwords to use for the connection')
+    parser.add_option('-F', '--brokers-file',
+                      dest='brokers_file', 
+                      default=None,
+                      help='file containing the list of brokers URIs in the network, one per line')
+    parser.add_option('-m', '--messages-number',
+                      dest='messages_number', 
+                      type="int", 
+                      default=1, 
+                      help='messages number [default=1]')
+    parser.add_option('-T', '--virtual-destinations',
+                      dest='virtual_destinations', 
+                      action="store_true", 
+                      default=False, 
+                      help='by default the network is checked through a normal topic, if this flag is activated virtual destinations will be checked')
+    parser.add_option('-P', '--virtual-destination-prefix',
+                      dest='vt_prefix', 
+                      default='Consumer',
+                      help='the virtual destination prefix [default=Consumer], ignored if -V not present')
+    opts, args = parser.parse_args()
+    if opts.version:
+        print_version()
+        sys.exit(NAGIOS_OK)
+    if opts.verbose:
+        log.setLevel(logging.INFO)
+        logging.getLogger('MultipleProducerConsumer').setLevel(logging.INFO)
+    if opts.debug:
+        log.setLevel(logging.DEBUG)
+        logging.getLogger('stomp').setLevel(logging.DEBUG)
+    parser.check_required("-H")
+    parser.check_required("-D")
+    parser.check_required("-p")
+    parser.check_required("-F")
+    return opts, args
+
+def get_brokers_list(brokers_file):
+    try:
+        file = open(brokers_file, 'r')
+    except IOError:
+        print "UNKNOWN - Brokers list file not found or not readable"
+        sys.exit(NAGIOS_UNKNOWN)
+    brokers = dict()
+    line = file.readline()
+    while line:
+        host = line.split('//')[1].split(':')[0]
+        brokers[host.replace('.','_')] = host
+        line = file.readline()
+    return brokers
+
+def get_credentials(credentials):
+    cred = dict()
+    for i in credentials.split(","):
+        if len(i.split(":")) == 3:
+            (host, user, pwd) = i.split(":")
+            cred[host] = (user, pwd)
+    return cred
+
+def set_credentials(probe, credentials):
+    for i,v in credentials.items():
+        probe.setConnectionHeader(i, 'user', v[0])
+        probe.setConnectionHeader(i, 'passcode', v[1])
+
+if __name__ == '__main__':
+    
+    opts, args = parse_args()
+    error_code = NAGIOS_CRITICAL
+    error_prefix = "CRITICAL - "
+    if opts.warning:
+        error_code = NAGIOS_WARNING
+        error_prefix = "WARNING - "
+
+    if opts.ssl:
+        if opts.hostcert and (not os.path.exists(opts.hostcert)):
+            log.info("Host cert doesn't exists or not readable")
+            print "UNKNOWN - Host cert doesn't exists or not readable"
+            sys.exit(NAGIOS_UNKNOWN)
+        if opts.hostkey and (not os.path.exists(opts.hostkey)):
+            log.info("Host key doesn't exists or not readable")
+            print "UNKNOWN - Host key doesn't exists or not readable"
+            sys.exit(NAGIOS_UNKNOWN)
+    else:
+        opts.hostcert = None
+        opts.hostkey = None
+        
+    network = get_brokers_list(opts.brokers_file)
+    credentials = get_credentials(opts.credentials)
+    
+    if opts.virtual_destinations:
+        message = 'OK - Virtual destinations are working in the network of brokers. Sent %d messages to a topic, %d messages received in all the virtual destinations of the network.' \
+            % (opts.messages_number, opts.messages_number)
+        mbt = MultipleBrokersVirtualTopic(opts.hostname, opts.hostname, network, opts.port, destination=opts.dest, vtPrefix=opts.vt_prefix, hostcert=opts.hostcert, hostkey=opts.hostkey, messages=opts.messages_number, timeout=opts.timeout)
+    else:
+        message = 'OK - Network of brokers is working. Sent %d messages to a topic, %d messages received in all the brokers of the network.' \
+            % (opts.messages_number, opts.messages_number)
+        mbt = MultipleBrokersTopic(opts.hostname, opts.hostname, network, opts.port, destination=opts.dest, hostcert=opts.hostcert, hostkey=opts.hostkey, messages=opts.messages_number, timeout=opts.timeout)
+    exit_code = NAGIOS_OK
+    
+    mbt.setup()
+    set_credentials(mbt, credentials)
+    try:
+        mbt.start()
+    except KeyboardInterrupt, e:
+        exit_code = error_code
+        message = "%skeyboard interrupt" % (error_prefix)
+    except TimeoutException, e:
+        exit_code = error_code
+        message = '%sTimeout error checking network of brokers on port %s: %s' \
+                % (error_prefix, opts.port, e)
+    except AssertionError, e:
+        exit_code = error_code
+        message = '%s%s' % (error_prefix, e)
+    except ErrorFrameException, e:
+        exit_code = NAGIOS_WARNING
+        message = 'WARNING - %s' % e
+    mbt.stop()
+    
+    print message
+    sys.exit(exit_code)

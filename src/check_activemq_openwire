@@ -1,0 +1,163 @@
+#!/usr/bin/perl
+
+###  check_activemq_openwire
+# prologue
+use strict;
+use warnings;
+
+use Nagios::Plugin ;
+
+use vars qw($VERSION $PROGNAME $output $return_code);
+$VERSION = '1.0';
+
+# get the base name of this script for use in the examples
+use File::Basename;
+$PROGNAME = basename($0);
+
+# Instantiate Nagios::Plugin object (the 'usage' parameter is mandatory)
+my $p = Nagios::Plugin->new(
+    usage => "Usage: $PROGNAME [ -v|--verbose ]  [-H <host>] [-t <timeout>]\n"
+             . "[ -c|--critical= (IGNORED) <critical threshold> ]\n"
+             . "[ -w|--warning= (IGNORED) <warning threshold> ]\n"
+             . "[ -u|--url = <url string> ]\n"
+             . "[ -s|--subject = <url string> ]\n"
+             . "[ -T|--truststore = <truststore path> ]\n"
+             . "[ -K|--keystore = <keystore path> ]\n"
+             . "[ --keystoretype = <keystore type> ]\n"
+             . "[ --keystorepwd = <keystore password> ]\n"
+             . "[ --username = <username> ]\n"
+             . "[ --password = <password> ]\n",
+    version => $VERSION,
+    blurb => "This plugin is a Nagios plugin written in Perl using the\n"
+             . "Nagios::Plugin modules.  It will test the ActiveMQ OpenWire\n"
+             . "connection, and will output OK, WARNING or CRITICAL if the\n"
+             . "resulting number is outside the specified thresholds.\n",
+	extra => q{}
+);
+
+
+# Define and document the valid command line options
+# usage, help, version, timeout and verbose are defined by default.
+$p->add_arg(
+	spec => 'warning|w=s',
+
+	help => 
+'-w, --warning=INTEGER:INTEGER'
+. "\tMinimum and maximum number of allowable result, outside of which a"
+. "\twarning will be generated.  If omitted, no warning is generated.",
+	default => 0,
+);
+
+$p->add_arg(
+	spec => 'critical|c=s',
+	help => 
+'-c, --critical=INTEGER:INTEGER'
+. "\tMinimum and maximum number of the generated result, outside of"
+. "\twhich a critical will be generated.",
+    default => 1,
+);
+
+$p->add_arg(
+	spec => 'url|u=s',
+	help => 
+'-u, --url=STRING'
+. "\tSpecify the Broker url.",
+    required => 1,
+);
+
+$p->add_arg(
+	spec => 'subject|s=s',
+	help => 
+'-s, --subject=STRING'
+. "\tSpecify the subject.",
+    required => 1,
+);
+
+$p->add_arg(
+	spec => 'keystore|K=s',
+	help => 
+'-s, --subject=STRING'
+. "\tSpecify the key store.",
+);
+
+$p->add_arg(
+	spec => 'truststore|T=s',
+	help => 
+'-s, --subject=STRING'
+. "\tSpecify the subject.",
+);
+
+$p->add_arg(
+	spec => 'keystoretype=s',
+	help => '--keystoretype=STRING'
+. "\tSpecify the keystore type.",
+);
+
+$p->add_arg(
+	spec => 'keystorepwd=s',
+	help => 
+'--keystorepwd=STRING'
+. "\tSpecify the keystore password.",
+);
+
+$p->add_arg(
+	spec => 'username=s',
+	help => 
+'--username=STRING'
+. "\tSpecify the username for the connection.",
+);
+
+$p->add_arg(
+	spec => 'password=s',
+	help => 
+'--password=STRING'
+. "\tSpecify the password for the connection.",
+);
+
+
+$p->getopts;
+
+alarm $p->opts->timeout;
+
+my $ssl_opts = q{};
+if (  defined $p->opts->keystore ||
+      defined $p->opts->keystoretype || 
+      defined $p->opts->keystorepwd ||
+      defined $p->opts->truststore) {
+    
+    unless (defined $p->opts->keystore &&
+            defined $p->opts->keystoretype &&
+            defined $p->opts->keystorepwd &&
+            defined $p->opts->truststore){
+        $p->nagios_die( 
+                'You have to provide the right parameters to use SSL.' );
+    }
+    $p->nagios_die('KeyStore file doesn\'t exists') unless
+            -e $p->opts->keystore;
+    $p->nagios_die('KeyStore file not readable') unless
+            -r $p->opts->keystore;
+    $p->nagios_die('TrustStore file doesn\'t exists') unless
+            -e $p->opts->truststore;
+    $p->nagios_die('TrustStore file not readable') unless
+            -r $p->opts->truststore;
+    $ssl_opts = " --ks=\"$p->{opts}->{keystore}\""
+              . " --kstype=\"$p->{opts}->{keystoretype}\""
+              . " --kspwd=\"$p->{opts}->{keystorepwd}\""
+              . " --ts=\"$p->{opts}->{truststore}\"";
+}
+my $cmd = '/usr/bin/java -cp .:/usr/share/java/* '
+          . 'org.activemq.probes.OpenWireProbe '
+          . "--url=$p->{opts}->{url}"
+          . " --subject='$p->{opts}->{subject}'"
+          . " $ssl_opts";
+$cmd .= " --username=$p->{opts}->{username} " if $p->{opts}->{username};
+$cmd .= " --password=$p->{opts}->{password} " if $p->{opts}->{password};
+print "$cmd\n" if $p->opts->verbose;
+$output = `$cmd`;
+$return_code = $? >> 8;
+print "Return code:$return_code\n" if $p->opts->verbose;
+
+$p->nagios_exit( 
+	 return_code => $return_code, 
+	 message => $output,
+);
