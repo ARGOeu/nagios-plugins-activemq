@@ -3,13 +3,14 @@
 Summary: Nagios plugins for Apache ActiveMQ
 Name: nagios-plugins-activemq
 Version: 1.0.0
-Release: 1%{?dist}
+Release: 2%{?dist}
 License: ASL 2.0
 Group: Network/Monitoring
 Source0: %{name}-%{version}.tar.gz
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
 BuildArch: noarch
-PreReq: stomppy, nagios, perl-Nagios-Plugin
+PreReq: stomppy = 3.0.3-1
+PreReq: nagios, perl-Nagios-Plugin
 BuildRequires: xml-commons-apis, ant
 
 %description

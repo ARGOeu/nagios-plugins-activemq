@@ -15,5 +15,6 @@ sources: dist
 
 clean:
 	ant -f lib/OpenWireProbe/build.xml clean
+	rm -f src/*.pyc src/amq/*.pyc src/amq/utils/*.pyc
 	rm -rf ${PKGNAME}-${PKGVERSION}.tar.gz
 	rm -rf dist

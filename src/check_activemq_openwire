@@ -145,7 +145,7 @@ if (  defined $p->opts->keystore ||
               . " --kspwd=\"$p->{opts}->{keystorepwd}\""
               . " --ts=\"$p->{opts}->{truststore}\"";
 }
-my $cmd = '/usr/bin/java -cp .:/usr/share/java/* '
+my $cmd = '/usr/bin/java -cp /usr/libexec/argo-monitoring/probes/activemq/*:/usr/share/java/* '
           . 'org.activemq.probes.OpenWireProbe '
           . "--url=$p->{opts}->{url}"
           . " --subject='$p->{opts}->{subject}'"
